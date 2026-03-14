@@ -1,6 +1,6 @@
 ﻿/*
 Technitium DNS Server
-Copyright (C) 2025  Shreyas Zare (shreyas@technitium.com)
+Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -76,7 +76,7 @@ namespace DnsServerCore.Cluster
         bool _clusterUpdateForSecondaryNodeChangesTimerTriggered;
         const int CLUSTER_UPDATE_FOR_SECONDARY_NODE_CHANGES_TIMER_INTERVAL = 5000;
 
-        readonly object _saveLock = new object();
+        readonly Lock _saveLock = new Lock();
         bool _pendingSave;
         readonly Timer _saveTimer;
         const int SAVE_TIMER_INITIAL_INTERVAL = 5000;
@@ -116,6 +116,37 @@ namespace DnsServerCore.Cluster
                     }
                 }
             });
+
+            LoadConfigFile();
+
+            if (ClusterInitialized)
+            {
+                //find and fix Cluster API token
+                bool foundClusterApiToken = false;
+
+                foreach (UserSession session in _dnsWebService.AuthManager.Sessions)
+                {
+                    if (session.Type == UserSessionType.ClusterApiToken)
+                    {
+                        foundClusterApiToken = true;
+                        break;
+                    }
+                }
+
+                if (!foundClusterApiToken)
+                {
+                    Group administrators = _dnsWebService.AuthManager.GetGroup(Group.ADMINISTRATORS);
+
+                    foreach (UserSession session in _dnsWebService.AuthManager.Sessions)
+                    {
+                        if ((session.Type == UserSessionType.ApiToken) && _clusterDomain.Equals(session.TokenName, StringComparison.OrdinalIgnoreCase) && session.User.IsMemberOfGroup(administrators))
+                        {
+                            session.UpgradeToClusterApiToken();
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         #endregion
@@ -165,7 +196,7 @@ namespace DnsServerCore.Cluster
 
         #region config
 
-        public void LoadConfigFile()
+        private void LoadConfigFile()
         {
             string configFile = Path.Combine(_dnsWebService.ConfigFolder, "cluster.config");
 
@@ -251,6 +282,7 @@ namespace DnsServerCore.Cluster
             if (!ClusterInitialized)
                 throw new InvalidOperationException();
 
+            string tmpConfigFile = Path.Combine(_dnsWebService.ConfigFolder, "cluster.tmp");
             string configFile = Path.Combine(_dnsWebService.ConfigFolder, "cluster.config");
 
             using (MemoryStream mS = new MemoryStream())
@@ -261,11 +293,13 @@ namespace DnsServerCore.Cluster
                 //write config
                 mS.Position = 0;
 
-                using (FileStream fS = new FileStream(configFile, FileMode.Create, FileAccess.Write))
+                using (FileStream fS = new FileStream(tmpConfigFile, FileMode.Create, FileAccess.Write))
                 {
                     mS.CopyTo(fS);
                 }
             }
+
+            File.Move(tmpConfigFile, configFile, true);
 
             _dnsWebService.LogManager.Write("DNS Server Cluster config file was saved: " + configFile);
         }
@@ -460,8 +494,11 @@ namespace DnsServerCore.Cluster
             {
                 foreach (UserSession session in _dnsWebService.AuthManager.Sessions)
                 {
-                    if ((session.Type == UserSessionType.ApiToken) && (session.TokenName == _clusterDomain))
+                    if (session.Type == UserSessionType.ClusterApiToken)
+                    {
                         _dnsWebService.AuthManager.DeleteSession(session.Token);
+                        break;
+                    }
                 }
             }
 
@@ -583,7 +620,7 @@ namespace DnsServerCore.Cluster
 
                 foreach (UserSession existingSession in userSessions)
                 {
-                    if ((existingSession.Type == UserSessionType.ApiToken) && (existingSession.TokenName == clusterZoneInfo.Name))
+                    if (existingSession.Type == UserSessionType.ClusterApiToken)
                     {
                         apiTokenExists = true;
                         break;
@@ -591,7 +628,7 @@ namespace DnsServerCore.Cluster
                 }
 
                 if (!apiTokenExists)
-                    _dnsWebService.AuthManager.CreateApiToken(clusterZoneInfo.Name, session.User.Username, session.LastSeenRemoteAddress, session.LastSeenUserAgent);
+                    _dnsWebService.AuthManager.CreateSession(UserSessionType.ClusterApiToken, clusterZoneInfo.Name, session.User.Username, session.LastSeenRemoteAddress, session.LastSeenUserAgent);
             }
 
             //dispose existing nodes, if any
@@ -659,7 +696,7 @@ namespace DnsServerCore.Cluster
             foreach (KeyValuePair<int, ClusterNode> existingClusterNode in existingClusterNodes)
             {
                 if (existingClusterNode.Value.Name.Equals(secondaryNodeUrl.Host, StringComparison.OrdinalIgnoreCase))
-                    throw new DnsServerException("Failed to add Secondary node: the Secondary node's domain name already exists in the Cluster. Please try again after changing the Secondary DNS Server's domain name.");
+                    throw new DnsServerException("Failed to add Secondary node: A node with the same DNS Server Domain Name already exists in the Cluster. Please try again after changing the Secondary node's DNS Server Domain Name.");
             }
 
             //add secondary node to cluster nodes
@@ -796,7 +833,7 @@ namespace DnsServerCore.Cluster
                     continue; //skip self
 
                 if (clusterNode.Value.Name.Equals(secondaryNodeUrl.Host, StringComparison.OrdinalIgnoreCase))
-                    throw new DnsServerException("Failed to update Secondary node: the Secondary node's domain name already exists in the Cluster. Please try again after changing the Secondary DNS Server's domain name.");
+                    throw new DnsServerException("Failed to update Secondary node: A node with the same DNS Server Domain Name already exists in the Cluster. Please try again after changing the Secondary node's DNS Server Domain Name.");
             }
 
             bool secondaryNodeDomainChanged = !secondaryNode.Name.Equals(secondaryNodeUrl.Host, StringComparison.OrdinalIgnoreCase);
@@ -1282,7 +1319,7 @@ namespace DnsServerCore.Cluster
             {
                 try
                 {
-                    IReadOnlyList<IPAddress> ipAddresses = await DnsClient.ResolveIPAsync(_dnsWebService.DnsServer, primaryNodeUrl.Host, _dnsWebService.DnsServer.PreferIPv6, cancellationToken);
+                    IReadOnlyList<IPAddress> ipAddresses = await DnsClient.ResolveIPAsync(_dnsWebService.DnsServer, primaryNodeUrl.Host, _dnsWebService.DnsServer.IPv6Mode, cancellationToken);
                     if (ipAddresses.Count < 1)
                         throw new DnsServerException($"The domain name '{primaryNodeUrl.Host}' does not have an A/AAAA record configured.");
 
@@ -1295,7 +1332,7 @@ namespace DnsServerCore.Cluster
             }
 
             //login to primary node API
-            using HttpApiClient primaryNodeApiClient = new HttpApiClient(primaryNodeUrl, _dnsWebService.DnsServer.Proxy, _dnsWebService.DnsServer.PreferIPv6, ignoreCertificateErrors, new InternalDnsClient(_dnsWebService.DnsServer, primaryNodeIpAddresses));
+            using HttpApiClient primaryNodeApiClient = new HttpApiClient(primaryNodeUrl, _dnsWebService.DnsServer.Proxy, _dnsWebService.DnsServer.IPv6Mode, ignoreCertificateErrors, new InternalDnsClient(_dnsWebService.DnsServer, primaryNodeIpAddresses), TimeSpan.FromSeconds(300));
 
             try
             {
@@ -1389,7 +1426,15 @@ namespace DnsServerCore.Cluster
                     catch
                     { }
 
-                    DeleteAllClusterConfig();
+                    try
+                    {
+                        DeleteAllClusterConfig();
+                    }
+                    catch (Exception ex)
+                    {
+                        _dnsWebService.LogManager.Write(ex);
+                    }
+
                     throw;
                 }
 
@@ -1453,7 +1498,7 @@ namespace DnsServerCore.Cluster
             {
                 try
                 {
-                    IReadOnlyList<IPAddress> ipAddresses = await DnsClient.ResolveIPAsync(_dnsWebService.DnsServer, primaryNodeUrl.Host, _dnsWebService.DnsServer.PreferIPv6, cancellationToken);
+                    IReadOnlyList<IPAddress> ipAddresses = await DnsClient.ResolveIPAsync(_dnsWebService.DnsServer, primaryNodeUrl.Host, _dnsWebService.DnsServer.IPv6Mode, cancellationToken);
                     if (ipAddresses.Count < 1)
                         throw new DnsServerException($"The domain name '{primaryNodeUrl.Host}' does not have an A/AAAA record configured.");
 
