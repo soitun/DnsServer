@@ -1,6 +1,6 @@
 ﻿/*
 Technitium DNS Server
-Copyright (C) 2025  Shreyas Zare (shreyas@technitium.com)
+Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -31,7 +31,9 @@ namespace DnsServerCore.Auth
     {
         Unknown = 0,
         Standard = 1,
-        ApiToken = 2
+        ApiToken = 2,
+        ClusterApiToken = 3,
+        SingleUse = 4
     }
 
     class UserSession : IComparable<UserSession>
@@ -39,7 +41,7 @@ namespace DnsServerCore.Auth
         #region variables
 
         readonly string _token;
-        readonly UserSessionType _type;
+        UserSessionType _type;
         readonly string _tokenName;
         User _user;
         DateTime _lastSeen;
@@ -124,15 +126,32 @@ namespace DnsServerCore.Auth
                 _lastSeenUserAgent = _lastSeenUserAgent.Substring(0, 255);
         }
 
-        public bool HasExpired()
+        public void UpgradeToClusterApiToken()
         {
             if (_type == UserSessionType.ApiToken)
-                return false;
+                _type = UserSessionType.ClusterApiToken;
+        }
 
-            if (_user.SessionTimeoutSeconds == 0)
-                return false;
+        public bool HasExpired()
+        {
+            if (_user is null)
+                return true;
 
-            return _lastSeen.AddSeconds(_user.SessionTimeoutSeconds) < DateTime.UtcNow;
+            switch (_type)
+            {
+                case UserSessionType.Standard:
+                    if (_user.SessionTimeoutSeconds == 0)
+                        return false;
+
+                    return _lastSeen.AddSeconds(_user.SessionTimeoutSeconds) < DateTime.UtcNow;
+
+                case UserSessionType.ApiToken:
+                case UserSessionType.ClusterApiToken:
+                    return false;
+
+                default:
+                    return true;
+            }
         }
 
         public void WriteTo(BinaryWriter bW)
