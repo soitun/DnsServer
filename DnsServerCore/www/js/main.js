@@ -235,6 +235,8 @@ function showPageMain() {
 }
 
 $(function () {
+    initTheme();
+
     var headerHtml = $("#header").html();
 
     $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/logo25x25.png\" alt=\"Technitium Logo\" /><span class=\"text\" style=\"color: #ffffff;\">Technitium</span></a>" + headerHtml + "</div>");
@@ -565,8 +567,6 @@ $(function () {
     $("#btnCustomDayWise").on("click", function () {
         refreshDashboard();
     });
-
-    applyTheme();
 });
 
 function showAbout() {
@@ -1109,6 +1109,8 @@ function loadDnsSettings(responseJSON) {
     $("#txtQuicIdleTimeout").val(responseJSON.response.quicIdleTimeout);
     $("#txtQuicMaxInboundStreams").val(responseJSON.response.quicMaxInboundStreams);
     $("#txtListenBacklog").val(responseJSON.response.listenBacklog);
+    $("#txtUdpSendBufferSizeKB").val(responseJSON.response.udpSendBufferSizeKB);
+    $("#txtUdpReceiveBufferSizeKB").val(responseJSON.response.udpReceiveBufferSizeKB);
     $("#txtMaxConcurrentResolutionsPerCore").val(responseJSON.response.maxConcurrentResolutionsPerCore);
 
     //web service
@@ -1629,6 +1631,20 @@ function saveDnsSettings(objBtn) {
             return;
         }
 
+        var udpSendBufferSizeKB = $("#txtUdpSendBufferSizeKB").val();
+        if ((udpSendBufferSizeKB == null) || (udpSendBufferSizeKB === "")) {
+            showAlert("warning", "Missing!", "Please enter a value for UDP Send Buffer Size.");
+            $("#txtUdpSendBufferSizeKB").trigger("focus");
+            return;
+        }
+
+        var udpReceiveBufferSizeKB = $("#txtUdpReceiveBufferSizeKB").val();
+        if ((udpReceiveBufferSizeKB == null) || (udpReceiveBufferSizeKB === "")) {
+            showAlert("warning", "Missing!", "Please enter a value for UDP Receive Buffer Size.");
+            $("#txtUdpReceiveBufferSizeKB").trigger("focus");
+            return;
+        }
+
         var maxConcurrentResolutionsPerCore = $("#txtMaxConcurrentResolutionsPerCore").val();
         if ((maxConcurrentResolutionsPerCore == null) || (maxConcurrentResolutionsPerCore === "")) {
             showAlert("warning", "Missing!", "Please enter a value for Max Concurrent Resolutions.");
@@ -1639,7 +1655,7 @@ function saveDnsSettings(objBtn) {
         formData += "&udpPayloadSize=" + udpPayloadSize + "&dnssecValidation=" + dnssecValidation;
         formData += "&eDnsClientSubnet=" + eDnsClientSubnet + "&eDnsClientSubnetIPv4PrefixLength=" + eDnsClientSubnetIPv4PrefixLength + "&eDnsClientSubnetIPv6PrefixLength=" + eDnsClientSubnetIPv6PrefixLength + "&eDnsClientSubnetIpv4Override=" + encodeURIComponent(eDnsClientSubnetIpv4Override) + "&eDnsClientSubnetIpv6Override=" + encodeURIComponent(eDnsClientSubnetIpv6Override);
         formData += "&qpmPrefixLimitsIPv4=" + encodeURIComponent(qpmPrefixLimitsIPv4) + "&qpmPrefixLimitsIPv6=" + encodeURIComponent(qpmPrefixLimitsIPv6) + "&qpmLimitSampleMinutes=" + qpmLimitSampleMinutes + "&qpmLimitUdpTruncationPercentage=" + qpmLimitUdpTruncationPercentage + "&qpmLimitBypassList=" + encodeURIComponent(qpmLimitBypassList);
-        formData += "&clientTimeout=" + clientTimeout + "&tcpSendTimeout=" + tcpSendTimeout + "&tcpReceiveTimeout=" + tcpReceiveTimeout + "&quicIdleTimeout=" + quicIdleTimeout + "&quicMaxInboundStreams=" + quicMaxInboundStreams + "&listenBacklog=" + listenBacklog + "&maxConcurrentResolutionsPerCore=" + maxConcurrentResolutionsPerCore;
+        formData += "&clientTimeout=" + clientTimeout + "&tcpSendTimeout=" + tcpSendTimeout + "&tcpReceiveTimeout=" + tcpReceiveTimeout + "&quicIdleTimeout=" + quicIdleTimeout + "&quicMaxInboundStreams=" + quicMaxInboundStreams + "&listenBacklog=" + listenBacklog + "&udpSendBufferSizeKB=" + udpSendBufferSizeKB + "&udpReceiveBufferSizeKB=" + udpReceiveBufferSizeKB + "&maxConcurrentResolutionsPerCore=" + maxConcurrentResolutionsPerCore;
     }
 
     //web service
@@ -2993,24 +3009,53 @@ function restoreSettings() {
     });
 }
 
-function applyTheme() {
-    const currentTheme = localStorage.getItem("theme");
+function initTheme() {
+    if (window.matchMedia) {
+        window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", e => {
+            const currentTheme = localStorage.getItem("theme");
+            switch (currentTheme) {
+                case "light":
+                case "dark":
+                    //do nothing
+                    break;
 
-    if (currentTheme === "dark")
-        document.body.classList.add("dark-mode");
-    else
-        document.body.classList.remove("dark-mode");
+                default:
+                    if (e.matches)
+                        applyDarkMode();
+                    else
+                        applyLightMode();
+
+                    break;
+            }
+        });
+    }
+
+    const currentTheme = localStorage.getItem("theme");
+    changeTheme(currentTheme);
 }
 
-function toggleTheme() {
-    document.body.classList.toggle("dark-mode");
+function changeTheme(newTheme) {
+    switch (newTheme) {
+        case "light":
+            applyLightMode();
+            break;
 
-    let theme = "light";
+        case "dark":
+            applyDarkMode();
+            break;
 
-    if (document.body.classList.contains("dark-mode"))
-        theme = "dark";
+        default:
+            if (window.matchMedia) {
+                if (window.matchMedia("(prefers-color-scheme: dark)").matches)
+                    applyDarkMode();
+                else
+                    applyLightMode();
+            }
 
-    localStorage.setItem("theme", theme);
+            break;
+    }
+
+    localStorage.setItem("theme", newTheme);
 
     if (window.chartDashboardMain) {
         window.chartDashboardMain.update();
@@ -3018,4 +3063,33 @@ function toggleTheme() {
         window.chartDashboardPie2.update();
         window.chartDashboardPie3.update();
     }
+}
+
+function applyDarkMode() {
+    document.body.classList.add("dark-mode");
+    document.body.classList.remove("light-mode");
+}
+
+function applyLightMode() {
+    document.body.classList.add("light-mode");
+    document.body.classList.remove("dark-mode");
+}
+
+function showChangeThemeModal() {
+    const currentTheme = localStorage.getItem("theme");
+    switch (currentTheme) {
+        case "light":
+            $("#rdChangeThemeLight").prop("checked", true);
+            break;
+
+        case "dark":
+            $("#rdChangeThemeDark").prop("checked", true);
+            break;
+
+        default:
+            $("#rdChangeThemeSystem").prop("checked", true);
+            break;
+    }
+
+    $("#modalChangeTheme").modal("show");
 }
