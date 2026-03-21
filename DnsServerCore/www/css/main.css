@@ -635,15 +635,15 @@ body.dark-mode {
         filter: invert(1);
     }
 
-.dark-mode .close {
+.dark-mode .modal-header .close {
     color: #fff;
-    text-shadow: 0 1px 0 #3a3a3c;
+    text-shadow: 0 1px 0 #3a3a3a;
 }
 
-.dark-mode .close:hover,
-.dark-mode .close:focus {
-    color: #387aff;
-}
+    .dark-mode .modal-header .close:hover,
+    .dark-mode .modal-header .close:focus {
+        color: #cacaca;
+    }
 
 .dark-mode button,
 .dark-mode input,
